@@ -203,7 +203,8 @@ var Permissions = getModule(byKeys("computePermissions"));
 var SelectedChannelStore = getModule(byStoreName("SelectedChannelStore"));
 var SelectedGuildStore = getModule(byStoreName("SelectedGuildStore"));
 var ChannelStore = getModule(byStoreName("ChannelStore"));
-var UserStore = getModule(byStoreName("UserStore"));
+var UserStore =
+	Webpack.getStore?.("UserStore") ?? getModule(byStoreName("UserStore"));
 var UserTypingStore = getModule(byStoreName("TypingStore"));
 var RelationshipStore = getModule(byStoreName("RelationshipStore"));
 var GuildStore = getModule(byStoreName("GuildStore"));
@@ -243,15 +244,54 @@ var Slider = getModule(
 	{ searchExports: true },
 );
 var NavShortcuts = getModule(byKeys("NAVIGATE_BACK", "NAVIGATE_FORWARD"));
-var [TitleBar, TitleBarKey] = Webpack.getWithKey(
-	byStrings("leading", "trailing", "title", "windowKey"),
+// Discord's rspack bundles export plain properties that getWithKey misses,
+// so find the exports object and the key by hand.
+var titleBarFilter = Webpack.Filters.byStrings(
+	"leading",
+	"trailing",
+	"title",
+	"windowKey",
 );
+var [TitleBar, TitleBarKey] = Webpack.getWithKey(titleBarFilter) ?? [];
+if (!TitleBar) {
+	TitleBar = Webpack.getModule(
+		(m) =>
+			m &&
+			typeof m === "object" &&
+			Object.values(m).some((v) => typeof v === "function" && titleBarFilter(v)),
+	);
+	TitleBarKey = TitleBar
+		? Object.keys(TitleBar).find(
+				(k) => typeof TitleBar[k] === "function" && titleBarFilter(TitleBar[k]),
+			)
+		: void 0;
+	if (!TitleBarKey) TitleBar = void 0;
+}
 if (!TitleBar) missingModule({ name: "TitleBar", fatal: true });
 var IconUtilities = getModule(byKeys("getChannelIconURL"));
-var standardSidebarView =
-	BdApi.Webpack.getByKeys("standardSidebarView")?.standardSidebarView ?? "";
-var backdropClasses = getModule(byKeys("backdrop", "withLayer"));
-var scrimClasses = getModule(byKeys("scrim"));
+// CSS modules now use mangled export keys (e.g. bN: "systemBar_3zSH5d"),
+// so match on the class name in the value as well as the key.
+function findClassName(name, ...siblings) {
+	const pick = (m, n) =>
+		typeof m[n] === "string"
+			? m[n]
+			: Object.values(m).find(
+					(v) => typeof v === "string" && v.split(" ")[0].startsWith(`${n}_`),
+				);
+	const mod = Webpack.getModule(
+		(m) =>
+			m &&
+			typeof m === "object" &&
+			!Array.isArray(m) &&
+			[name, ...siblings].every((n) => pick(m, n)),
+	);
+	return mod ? pick(mod, name).split(" ")[0] : void 0;
+}
+var standardSidebarView = findClassName("standardSidebarView") ?? "";
+var backdropClasses = {
+	backdrop: findClassName("backdrop", "withLayer"),
+};
+var scrimClasses = { scrim: findClassName("scrim") };
 var noDragClasses = [
 	standardSidebarView,
 	// Settings view
@@ -260,7 +300,8 @@ var noDragClasses = [
 	scrimClasses?.scrim,
 	// Modal scrims
 ].filter((x) => x);
-var systemBarClasses = getModule(byKeys("systemBar"));
+var systemBarClasses = { systemBar: findClassName("systemBar") };
+if (!systemBarClasses.systemBar) missingModule({ name: "systemBar classes" });
 var Icons = {
 	XSmallIcon: () =>
 		/* @__PURE__ */ React.createElement(
@@ -1891,10 +1932,9 @@ var getCurrentIconUrl = (pathname = location.pathname) => {
 					return UserStore.getUser(channel.getRecipientId()).getAvatarURL();
 				return IconUtilities.getChannelIconURL(channel);
 			} else if (!gId.startsWith("@")) {
-				return (
-					IconUtilities.getGuildIconURL(GuildStore.getGuild(gId)) ??
-					DefaultUserIconGrey
-				);
+				const guild = GuildStore.getGuild(gId);
+				if (!guild) return DefaultUserIconGrey;
+				return IconUtilities.getGuildIconURL(guild) ?? DefaultUserIconGrey;
 			}
 		}
 	} catch (error) {
